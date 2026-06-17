@@ -1,0 +1,1100 @@
+import java.util.Calendar;
+import java.util.GregorianCalendar;
+import java.util.ArrayList;
+import processing.core.*;
+
+// ------------------------------------------------------------
+// GLOBAL ENGINE CONFIGURATION & STATE
+// ------------------------------------------------------------
+int screen = 1;       // 1=Students, 2=Staff, 3=Calendar, 4=Timetable, 5=Adjustment, 6=Internal Marks
+int selectedSem = 1;  // 1 to 6 (DME Semesters distributed across 3 Academic Years)
+
+int days = 1096;      // Expanded timeline matching June 10, 2026 to June 10, 2029 (includes 2028 leap year)
+int rowH = 35;
+int colW = 32;
+
+int marginX = 20;
+int marginTop = 150;
+int headerH = 55;
+
+int nameColW = 210;
+int roleColW = 150;
+int subjColW = 190;
+int tallyColW = 70;
+
+String[] dateLabels = new String[days];
+int[] daySemester = new int[days];
+
+PFont fontReg11, fontBold10, fontBold11, fontBold12, fontBold14, fontBold16, fontBold20;
+
+// EFFECTIVE SEPARATION OF ATTENDANCE CALENDARS
+char[] studentDayType = new char[days]; // 'W' = Work, 'H' = Holiday, 'F' = Half-day
+char[] staffDayType = new char[days];   // 'W' = Work, 'H' = Holiday, 'F' = Half-day
+
+float totalStudentWorkingDays = 0.0f;
+float totalStaffWorkingDays = 0.0f;
+
+// LIVE DAILY PERFORMANCE METRIC STREAM ARRAYS
+int[] dailyStudentPresent = new int[days];
+int[] dailyStudentAbsent = new int[days];
+int[] dailyStaffPresent = new int[days];
+int[] dailyStaffAbsent = new int[days];
+
+// CALENDAR CANVAS GUI CONFIGURATION
+int calendarActiveViewMode = 0;
+int calendarTargetMode = 0;
+
+// DOTE R2023 REGULATION SPECIFIC SUBJECT MATRIX FOR DIPLOMA IN MECHANICAL ENGINEERING (DME)
+String[][] dmeSubjects = {
+  {"Mathematics I", "Engineering Physics", "Engineering Chemistry", "Workshop Practice Lab"},
+  {"Applied Mechanics", "Strength of Materials", "Thermal Engineering I", "Machine Drawing Lab"},
+  {"Manufacturing Processes", "Fluid Power Engg", "Electrical Drives & Control", "Manufacturing Lab"},
+  {"Theory of Machines", "Special Machines", "Production Technology", "Special Machines Lab"},
+  {"Thermal Engg II", "Design of Machine Elements", "Mechatronics Systems", "CAD/CAM Simulation Lab"},
+  {"Industrial Management", "Automobile Engineering", "Smart Manufacturing", "Project & Viva-Voce"}
+};
+
+// ------------------------------------------------------------
+// SCREEN 1 & 6: ADVANCED STUDENT SYSTEM & MARKS (200/SEM)
+// ------------------------------------------------------------
+int students = 200;
+String[][] studentNames = new String[6][students];
+char[][][] studentAttendance = new char[6][students][days];
+
+float[][] studentRowPresent = new float[6][students];
+float[][] studentRowAbsent = new float[6][students];
+float[][] studentRowMedical = new float[6][students];
+
+// DOTE R2023 Continuous Internal Assessment (CIA) Matrix - 3 Tests Only (No Assignment/Attendance Weights)
+float[][] test1Marks = new float[6][students];
+float[][] test2Marks = new float[6][students];
+float[][] test3Marks = new float[6][students];
+
+boolean showingStudentDetail = false;
+int selectedStudent = -1;
+int selectedDayIndex = 0;
+
+float scrollX1 = 0, scrollY1 = 0, minScrollX1 = 0, minScrollY1 = 0;
+float scrollX2 = 0, scrollY2 = 0, minScrollX2 = 0, minScrollY2 = 0;
+float scrollY3 = 0, minScrollY3 = 0;
+float scrollX5 = 0, scrollY5 = 0, minScrollX5 = 0, minScrollY5 = 0;
+float scrollX6 = 0, scrollY6 = 0, minScrollX6 = 0, minScrollY6 = 0;
+
+// ------------------------------------------------------------
+// SCREEN 2 & 5: STAFF METRICS & ENGINE POOL
+// ------------------------------------------------------------
+int totalStaff = 24;
+String[] staffNames = new String[totalStaff];
+String[] staffRoles = new String[totalStaff];
+String[] staffSubjects = new String[totalStaff];
+int[] staffTargetSem = new int[totalStaff];
+
+char[][] staffAttendance = new char[totalStaff][days];
+int[] staffHoursWeekly = new int[totalStaff];
+float[] staffActualHoursSem = new float[totalStaff]; 
+float[] staffDeficit = new float[totalStaff];        
+float[] staffAbsences = new float[totalStaff];
+
+boolean showingStaffDetail = false;
+int selectedStaff = -1;
+
+// ------------------------------------------------------------
+// SCREEN 3: CHRONOLOGICAL CALENDAR TRACKING DATA
+// ------------------------------------------------------------
+String[] monthNames = { "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE", "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER" };
+String[] weekNames = { "MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN" };
+
+// ------------------------------------------------------------
+// SCREEN 4: DOTE POLYTECHNIC DME TIMETABLE MATRIX
+// ------------------------------------------------------------
+String[] ttDays = { "MON", "TUE", "WED", "THU", "FRI", "SAT" };
+String[] ttPeriods = { "P1 (09:00)", "P2 (09:50)", "P3 (11:00)", "P4 (11:50)", "P5 (13:30)", "P6 (14:20)", "P7 (15:10)" };
+String[][][] DME_Timetable = new String[6][6][7];
+
+boolean draggingSubject = false;
+int dragSourceP = -1, dragSourceD = -1;
+String dragSubjectStr = "";
+float dragMouseOffsetX = 0, dragMouseOffsetY = 0;
+
+// TIMETABLE STAFF DETAIL TRACKER
+boolean showingTimetableStaffDetail = false;
+int timetableSelectedStaff = -1;
+
+// --- CHAIN-SWAP ANIMATION ALGORITHM STATE ---
+class AnimStep {
+  int fromD, fromP, toD, toP;
+  String subjectLabel;
+  boolean isDisplacement;
+  AnimStep(int fd, int fp, int td, int tp, String sub, boolean displace) {
+    fromD = fd; fromP = fp; toD = td; toP = tp; subjectLabel = sub; isDisplacement = displace;
+  }
+}
+ArrayList<AnimStep> animationQueue = new ArrayList<AnimStep>();
+boolean isAnimatingGrid = false;
+int animFrameCount = 0;
+int ANIMATION_SPEED = 25;
+
+// ------------------------------------------------------------
+// SETUP ENGINE ENTRYPOINT
+// ------------------------------------------------------------
+void setup() {
+  fullScreen();
+  smooth(4);
+  rectMode(CORNER);
+  textAlign(CENTER, CENTER);
+
+  fontReg11 = createFont("SansSerif", 13);
+  fontBold10 = createFont("SansSerif Bold", 12);
+  fontBold11 = createFont("SansSerif Bold", 13);
+  fontBold12 = createFont("SansSerif Bold", 14);
+  fontBold14 = createFont("SansSerif Bold", 16);
+  fontBold16 = createFont("SansSerif Bold", 18);
+  fontBold20 = createFont("SansSerif Bold", 22);
+
+  initializeDateLabels();
+  generateStaticStaffPool();
+  generateTimetableBaseline();
+  generateInitialStudentData();
+  recalculateSystemMetrics();
+}
+
+// ------------------------------------------------------------
+// MAIN LOOP RENDER
+// ------------------------------------------------------------
+void draw() {
+  background(255);
+
+  if (screen == 1) {
+    if (showingStudentDetail) drawDetailView(true);
+    else { pushMatrix(); translate(scrollX1, scrollY1); drawStudentRegisterGrid(); popMatrix(); }
+  } else if (screen == 2) {
+    if (showingStaffDetail) drawDetailView(false);
+    else { pushMatrix(); translate(scrollX2, scrollY2); drawStaffRegisterGrid(); popMatrix(); }
+  } else if (screen == 3) {
+    pushMatrix(); translate(0, scrollY3); drawSemesterCalendarView(); popMatrix();
+  } else if (screen == 4) {
+    drawDME_TimetableScreen();
+  } else if (screen == 5) {
+    pushMatrix(); translate(scrollX5, scrollY5); drawAdjustmentAccountingScreen(); popMatrix();
+  } else if (screen == 6) {
+    pushMatrix(); translate(scrollX6, scrollY6); drawInternalMarksScreen(); popMatrix();
+  }
+
+  drawMasterTopBarUI();
+
+  if (draggingSubject && screen == 4 && !showingTimetableStaffDetail && !isAnimatingGrid) {
+    fill(255, 204, 153, 220); stroke(160);
+    int labelColW = 140; int scheduleColW = ((width - 2 * marginX) - labelColW) / ttDays.length;
+    int blockH = (height - (marginTop + 15) - 40) / 8;
+    rect(mouseX - dragMouseOffsetX, mouseY - dragMouseOffsetY, scheduleColW, blockH);
+    fill(0); textFont(fontReg11);
+    text(dragSubjectStr, mouseX - dragMouseOffsetX + scheduleColW/2, mouseY - dragMouseOffsetY + blockH/2);
+  }
+}
+
+// ------------------------------------------------------------
+// CHRONOLOGICAL DISCRIMINATION HELPER FUNCTION
+// ------------------------------------------------------------
+int calculateSemesterFromDate(int d) {
+  Calendar cal = Calendar.getInstance();
+  cal.set(2026, 5, 10);
+  cal.add(Calendar.DAY_OF_YEAR, d);
+  int m = cal.get(Calendar.MONTH); int y = cal.get(Calendar.YEAR);
+
+  if (y == 2026 || (y == 2027 && m < 5)) {
+    if (m >= 5 && m <= 9) return 1;
+    if (m == 11 || (m >= 0 && m <= 3)) return 2;
+  } else if (y == 2027 || (y == 2028 && m < 5)) {
+    if (m >= 5 && m <= 9) return 3;
+    if (m == 11 || (m >= 0 && m <= 3)) return 4;
+  } else if (y == 2028 || (y == 2029 && m <= 5)) {
+    if (m >= 5 && m <= 9) return 5;
+    if (m == 11 || (m >= 0 && m <= 3)) return 6;
+  }
+  return -1;
+}
+
+// ------------------------------------------------------------
+// INITIALIZATION SUBSYSTEMS
+// ------------------------------------------------------------
+void initializeDateLabels() {
+  Calendar cal = Calendar.getInstance(); cal.set(2026, 5, 10);
+  for (int i = 0; i < days; i++) {
+    Calendar instance = (Calendar) cal.clone();
+    instance.add(Calendar.DAY_OF_YEAR, i);
+    int m = instance.get(Calendar.MONTH); int y = instance.get(Calendar.YEAR);
+    dateLabels[i] = nf(instance.get(Calendar.DAY_OF_MONTH), 2) + "/" + nf(m + 1, 2) + "/" + String.valueOf(y).substring(2);
+    daySemester[i] = calculateSemesterFromDate(i);
+    int dayOfWeek = instance.get(Calendar.DAY_OF_WEEK);
+    if (dayOfWeek == Calendar.SUNDAY) { studentDayType[i] = 'H'; staffDayType[i] = 'H'; } 
+    else { studentDayType[i] = 'W'; staffDayType[i] = 'W'; }
+  }
+}
+
+void generateStaticStaffPool() {
+  String[] fnames = { "Dr. Arul Mozhi", "Prof. K. Rajan", "Mr. M. Selvam", "Mr. V. Thagar", "Dr. S. Meenakshi", "Prof. R. Balu", "Mr. G. Pandian", "Mr. T. Hari", "Dr. A. Anand", "Prof. C. Ramesh", "Mr. P. Kumar", "Mr. M. Vivek", "Dr. K. Senthil", "Prof. J. Ram", "Mr. S. Chitra", "Mr. P. Devi", "Dr. N. Mani", "Prof. K. Siva", "Mr. R. Karthik", "Mr. S. Suresh", "Dr. V. Prakash", "Prof. M. Vijay", "Mr. T. Ashok", "Mr. N. Dinesh" };
+  for (int i = 0; i < totalStaff; i++) {
+    int targetS = (i / 4) + 1; staffTargetSem[i] = targetS;
+    int subIdx = i % 4; String qual = "";
+    if (subIdx == 0) { staffRoles[i] = "HOD / Sen. Lecturer"; qual = "M.E., Ph.D"; } 
+    else if (subIdx == 1) { staffRoles[i] = "Lecturer"; qual = "M.E."; } 
+    else if (subIdx == 2) { staffRoles[i] = "Lecturer"; qual = "B.E."; } 
+    else { staffRoles[i] = "Lab Instructor"; qual = "Diploma"; }
+    
+    staffSubjects[i] = dmeSubjects[targetS - 1][subIdx];
+    staffNames[i] = fnames[i] + " (" + qual + ")";
+    for (int d = 0; d < days; d++) staffAttendance[i][d] = 'P';
+  }
+}
+
+void generateTimetableBaseline() {
+  for(int sem = 0; sem < 6; sem++) {
+    String subA = dmeSubjects[sem][0]; String subB = dmeSubjects[sem][1];
+    String subC = dmeSubjects[sem][2]; String subLab = dmeSubjects[sem][3];
+    String[] options = {subA, subB, subC, subLab};
+    for(int d = 0; d < 6; d++) { for(int p = 0; p < 7; p++) { DME_Timetable[sem][d][p] = "Free / Library"; } }
+    for (int subIdx = 0; subIdx < options.length; subIdx++) {
+       int allocated = 0;
+       for(int d = 0; d < 6; d++) {
+         if (allocated >= 5) break;
+         for(int p = 0; p < 7; p++) {
+            if (DME_Timetable[sem][d][p].equals("Free / Library")) {
+                DME_Timetable[sem][d][p] = options[subIdx]; allocated++; break;
+            }
+         }
+       }
+    }
+  }
+}
+
+void generateInitialStudentData() {
+  String[] fNames = {"Arun", "Karthik", "Vijay", "Ajith", "Manoj", "Hari", "Bala", "Ramesh", "Sanjay", "Siva", "Dinesh", "Suresh", "Prakash", "Ashok", "Gopinath", "Prabhu", "Mohan", "Venkatesh", "Ram", "Krishnan"};
+  String[] lNames = {"Kumar", "Raj", "Selvan", "Nathan", "Murugan", "Prasad", "Babu", "Das", "Raman", "Iyer", "Nair", "Pillai", "Reddy", "Gounder", "Thevar", "Chettiar", "Nadar", "Naidu", "Velas", "Swamy"};
+  for (int sem = 0; sem < 6; sem++) {
+    for (int s = 0; s < students; s++) {
+      studentNames[sem][s] = fNames[(s + sem) % fNames.length] + " " + lNames[(s * 2 + sem) % lNames.length] + " (DME-" + nf(s+1, 3) + ")";
+      for (int d = 0; d < days; d++) studentAttendance[sem][s][d] = 'P';
+      test1Marks[sem][s] = round(random(40.0, 100.0) * 10) / 10.0f; 
+      test2Marks[sem][s] = round(random(40.0, 100.0) * 10) / 10.0f; 
+      test3Marks[sem][s] = round(random(40.0, 100.0) * 10) / 10.0f;
+    }
+  }
+}
+
+// ------------------------------------------------------------
+// ALGORITHMIC METRIC COMPILATION ENGINE
+// ------------------------------------------------------------
+void recalculateSystemMetrics() {
+  totalStudentWorkingDays = 0; totalStaffWorkingDays = 0;
+  int activeSemIdx = selectedSem - 1;
+  for (int d = 0; d < days; d++) {
+    dailyStudentPresent[d] = 0; dailyStudentAbsent[d] = 0; dailyStaffPresent[d] = 0; dailyStaffAbsent[d] = 0;
+    if (daySemester[d] == selectedSem) { 
+      if (studentDayType[d] == 'W') totalStudentWorkingDays += 1.0f; else if (studentDayType[d] == 'F') totalStudentWorkingDays += 0.5f;
+      if (staffDayType[d] == 'W') totalStaffWorkingDays += 1.0f; else if (staffDayType[d] == 'F') totalStaffWorkingDays += 0.5f;
+    }
+  }
+
+  for (int sem = 0; sem < 6; sem++) {
+    for (int s = 0; s < students; s++) {
+      float p = 0, a = 0, m = 0;
+      for (int d = 0; d < days; d++) {
+        if (daySemester[d] != (sem + 1)) continue;
+        if (studentDayType[d] == 'H') continue;
+        float dayWeight = (studentDayType[d] == 'F') ? 0.5f : 1.0f;
+        char status = studentAttendance[sem][s][d];
+        if (status == 'A') a += dayWeight; else if (status == 'M') m += dayWeight; else p += dayWeight;
+        if (sem == activeSemIdx) { if (status == 'P') dailyStudentPresent[d]++; if (status == 'A') dailyStudentAbsent[d]++; if (status == 'M') dailyStudentPresent[d]++; }
+      }
+      studentRowPresent[sem][s] = p; studentRowAbsent[sem][s] = a; studentRowMedical[sem][s] = m;
+    }
+  }
+
+  for (int i = 0; i < totalStaff; i++) { staffHoursWeekly[i] = 0; staffAbsences[i] = 0; staffActualHoursSem[i] = 0; staffDeficit[i] = 0; }
+  for (int i = 0; i < totalStaff; i++) {
+    for (int d = 0; d < days; d++) {
+      if (daySemester[d] != staffTargetSem[i]) continue;
+      if (staffDayType[d] == 'H') continue;
+      float dayWeight = (staffDayType[d] == 'F') ? 0.5f : 1.0f;
+      char stat = staffAttendance[i][d];
+      if (stat == 'A' || stat == 'M') staffAbsences[i] += dayWeight;
+      if (staffTargetSem[i] == selectedSem) { if (stat == 'P') dailyStaffPresent[d]++; if (stat == 'A') dailyStaffAbsent[d]++; }
+    }
+  }
+
+  for(int sem=0; sem<6; sem++) {
+    for(int d=0; d<6; d++) {
+      for(int p=0; p<7; p++) {
+        String subject = DME_Timetable[sem][d][p];
+        for (int i = 0; i < totalStaff; i++) { if (staffTargetSem[i]-1 == sem && subject.equals(staffSubjects[i])) { staffHoursWeekly[i]++; } }
+      }
+    }
+  }
+
+  for (int d = 0; d < days; d++) {
+    int semActive = daySemester[d] - 1;
+    if (semActive < 0 || semActive > 5) continue;
+    int dayOfWeek = (d + 2) % 7;
+    if (dayOfWeek < 6) {
+      for (int p = 0; p < 7; p++) {
+        String scheduledSubject = DME_Timetable[semActive][dayOfWeek][p];
+        for (int i = 0; i < totalStaff; i++) {
+          if (staffTargetSem[i] - 1 == semActive && scheduledSubject.equals(staffSubjects[i])) {
+            if (staffDayType[d] != 'H' && staffAttendance[i][d] == 'P') { staffActualHoursSem[i] += (staffDayType[d] == 'F') ? 0.5f : 1.0f; }
+          }
+        }
+      }
+    }
+  }
+
+  // TARGET REALIGNMENT: Standard DOTE Full-time structure requires 560 Hours total per Semester
+  for (int i = 0; i < totalStaff; i++) {
+    int targetDOTEHours = 560; 
+    staffDeficit[i] = targetDOTEHours - staffActualHoursSem[i];
+    if (staffDeficit[i] < 0) staffDeficit[i] = 0;
+  }
+}
+
+// ------------------------------------------------------------
+// INTERFACE: TOP NAVIGATION BAR COMPONENT
+// ------------------------------------------------------------
+void drawMasterTopBarUI() {
+  fill(255); noStroke(); rect(0, 0, width, marginTop - 5);
+  stroke(180); strokeWeight(1); line(0, marginTop - 5, width, marginTop - 5);
+  fill(20, 40, 80); textAlign(LEFT, CENTER); textFont(fontBold20);
+  text("DOTE POLYTECHNIC DME MANAGEMENT SYSTEM (R2023)", marginX, 35);
+
+  int tabW = 145; int tabH = 36; int tabY = 18;
+  String[] tabNames = { "STUDENTS", "STAFF REGISTER", "CALENDAR", "TIMETABLE", "WORKLOAD", "INT. AUDIT" };
+  for (int i = 0; i < 6; i++) {
+    int x = width - (6 - i) * (tabW + 10) - marginX;
+    fill(screen == i + 1 ? color(0, 102, 204) : color(240)); stroke(140); rect(x, tabY, tabW, tabH, 4);
+    fill(screen == i + 1 ? 255 : 0); textFont(fontBold12); text(" " + tabNames[i], x + tabW / 2, tabY + tabH / 2);
+  }
+
+  int semBtnW = 130; int semBtnH = 32; int semBtnY = 75;
+  fill(0); textAlign(LEFT, CENTER); textFont(fontBold12);
+  String currentYearRange = " [YEAR 1: ODD SEM]";
+  if(selectedSem == 2) currentYearRange = " [YEAR 1: EVEN SEM]";
+  if(selectedSem == 3) currentYearRange = " [YEAR 2: ODD SEM]";
+  if(selectedSem == 4) currentYearRange = " [YEAR 2: EVEN SEM]";
+  if(selectedSem == 5) currentYearRange = " [YEAR 3: ODD SEM]";
+  if(selectedSem == 6) currentYearRange = " [YEAR 3: EVEN SEM]";
+  text("ACTIVE RADIAL TARGET:" + currentYearRange, marginX, semBtnY + semBtnH / 2);
+
+  for (int i = 1; i <= 6; i++) {
+    int x = 260 + (i - 1) * (semBtnW + 8);
+    fill(selectedSem == i ? color(0, 153, 76) : color(245)); stroke(160); rect(x, semBtnY, semBtnW, semBtnH, 4);
+    fill(selectedSem == i ? 255 : 0); textFont(fontBold12); text("SEMESTER " + i, x + semBtnW / 2, semBtnY + semBtnH / 2);
+  }
+
+  int toolBarY = 115; fill(0); textAlign(LEFT, CENTER); textFont(fontReg11);
+  if (screen == 1 || screen == 2) {
+    if (showingStudentDetail || showingStaffDetail) text("QUICK KEYS: [P]=Present, [A]=Absent, [M]=Medical, [H]=Global Holiday, [F]=Half-Day.", marginX, toolBarY);
+    else text("Dynamic timeline registration parameters showing selected mechanical terminal data.", marginX, toolBarY + 3);
+  } else if (screen == 3) { text("DOTE ACADEMIC CALENDAR ENGINE: Configure holiday weights across academic blocks.", marginX, toolBarY + 3);
+  } else if (screen == 4) { text("CLICK ASSIGNED BLOCKS to query deficit hours. DRAG & DROP to manipulate timeline distribution grids.", marginX, toolBarY + 3);
+  } else if (screen == 5) { text("COMPLIANCE BALANCING SYSTEM: Realized instruction hours balanced against statutory 560-hour semester baselines.", marginX, toolBarY + 3);
+  } else if (screen == 6) { text("R2023 REGULATION AUDIT: Internal marks (25 Max) computed exclusively from the 3 running internal tests.", marginX, toolBarY + 3);
+  }
+}
+
+// ------------------------------------------------------------
+// VIEWPORTS: MAIN MATRICES & RAPID ENTRY
+// ------------------------------------------------------------
+void drawStudentRegisterGrid() {
+  int startY = marginTop; int nameX = marginX; int dateStartX = nameX + nameColW; int rowStartY = startY + headerH;
+  int visibleColCount = 0; for (int d = 0; d < days; d++) { if (daySemester[d] == selectedSem) visibleColCount++; }
+  minScrollX1 = min(0, width - (dateStartX + visibleColCount * colW + tallyColW * 3 + marginX)); minScrollY1 = min(0, height - (rowStartY + students * rowH + rowH * 2 + marginX + 30));
+
+  fill(230); stroke(100); rect(nameX, startY, nameColW, headerH);
+  int colX = 0;
+  for (int d = 0; d < days; d++) {
+    if (daySemester[d] != selectedSem) continue; int cellRenderX = dateStartX + colX * colW;
+    if (cellRenderX + scrollX1 >= dateStartX - colW && cellRenderX + scrollX1 <= width) {
+      fill(studentDayType[d] == 'H' ? color(255, 230, 230) : (studentDayType[d] == 'F' ? color(255, 255, 204) : color(240))); rect(cellRenderX, startY, colW, headerH);
+      pushMatrix(); translate(cellRenderX + colW / 2, startY + 18); rotate(-HALF_PI); fill(0); textFont(fontBold10); text(dateLabels[d], 0, 0); popMatrix();
+      textFont(fontBold10); fill(0, 102, 204); text("P:" + dailyStudentPresent[d], cellRenderX + colW / 2, startY + headerH - 16); fill(204, 0, 0); text("A:" + dailyStudentAbsent[d], cellRenderX + colW / 2, startY + headerH - 6);
+    }
+    colX++;
+  }
+
+  int tallyStartX = dateStartX + visibleColCount * colW; fill(220); stroke(100);
+  rect(tallyStartX, startY, tallyColW, headerH); rect(tallyStartX + tallyColW, startY, tallyColW, headerH); rect(tallyStartX + tallyColW * 2, startY, tallyColW, headerH);
+  fill(0); textFont(fontBold11); text("TOTAL P", tallyStartX + tallyColW / 2, startY + headerH / 2); text("TOTAL A", tallyStartX + tallyColW + tallyColW / 2, startY + headerH / 2); text("TOTAL M", tallyStartX + tallyColW * 2 + tallyColW / 2, startY + headerH / 2);
+  text("DME STUDENT POOL (SEM " + selectedSem + ")", nameX + nameColW / 2, startY + headerH / 2);
+
+  int activeSemIdx = selectedSem - 1; int startVisibleS = max(0, int((-scrollY1 - headerH) / rowH)); int endVisibleS = min(students, startVisibleS + (height / rowH) + 2);
+  for (int s = startVisibleS; s < endVisibleS; s++) {
+    int y = rowStartY + s * rowH; boolean hoverState = (mouseX - scrollX1 >= nameX && mouseX - scrollX1 <= nameX + nameColW && mouseY - scrollY1 >= y && mouseY - scrollY1 < y + rowH);
+    fill(hoverState ? color(204, 229, 255) : (s % 2 == 0 ? 255 : 248)); stroke(180); rect(nameX, y, nameColW, rowH);
+    fill(0); textAlign(LEFT, CENTER); textFont(fontReg11); text(" " + studentNames[activeSemIdx][s], nameX + 4, y + rowH / 2);
+    textAlign(CENTER, CENTER); int innerColX = 0;
+    for (int d = 0; d < days; d++) {
+      if (daySemester[d] != selectedSem) continue; int x = dateStartX + innerColX * colW; char stat = studentAttendance[activeSemIdx][s][d];
+      if (studentDayType[d] == 'H') stat = 'H';
+      if (x + scrollX1 >= dateStartX - colW && x + scrollX1 <= width) {
+        fill(studentDayType[d] == 'H' ? 245 : 255); rect(x, y, colW, rowH);
+        fill(stat == 'A' ? color(220, 0, 0) : (stat == 'M' ? color(0,153,0) : (stat == 'H' ? color(160) : color(0, 0, 180)))); textFont(fontBold12); text(stat, x + colW / 2, y + rowH / 2);
+      }
+      innerColX++;
+    }
+    fill(240); stroke(180); rect(tallyStartX, y, tallyColW, rowH); rect(tallyStartX + tallyColW, y, tallyColW, rowH); rect(tallyStartX + tallyColW * 2, y, tallyColW, rowH);
+    fill(0); textFont(fontBold11);
+    text(nf(studentRowPresent[activeSemIdx][s], 1, 1), tallyStartX + tallyColW / 2, y + rowH / 2); text(nf(studentRowAbsent[activeSemIdx][s], 1, 1), tallyStartX + tallyColW + tallyColW / 2, y + rowH / 2); text(nf(studentRowMedical[activeSemIdx][s], 1, 1), tallyStartX + tallyColW * 2 + tallyColW / 2, y + rowH / 2);
+  }
+
+  int footerPresentY = rowStartY + students * rowH; int footerAbsentY = footerPresentY + rowH;
+  fill(220, 235, 255); stroke(100); rect(nameX, footerPresentY, nameColW, rowH);
+  fill(255, 230, 230); rect(nameX, footerAbsentY, nameColW, rowH);
+  fill(0); textAlign(LEFT, CENTER); textFont(fontBold11); text(" CLASS TOTAL PRESENT (P)", nameX + 4, footerPresentY + rowH / 2); text(" CLASS TOTAL ABSENT (A)", nameX + 4, footerAbsentY + rowH / 2);
+
+  int footerColX = 0;
+  for (int d = 0; d < days; d++) {
+    if (daySemester[d] != selectedSem) continue; int x = dateStartX + footerColX * colW;
+    if (x + scrollX1 >= dateStartX - colW && x + scrollX1 <= width) {
+      fill(240, 248, 255); stroke(140); rect(x, footerPresentY, colW, rowH); fill(0, 102, 204); textAlign(CENTER, CENTER); text(dailyStudentPresent[d], x + colW / 2, footerPresentY + rowH / 2);
+      fill(255, 240, 240); stroke(140); rect(x, footerAbsentY, colW, rowH); fill(204, 0, 0); text(dailyStudentAbsent[d], x + colW / 2, footerAbsentY + rowH / 2);
+    }
+    footerColX++;
+  }
+  fill(210); stroke(140); rect(tallyStartX, footerPresentY, tallyColW * 3, rowH); rect(tallyStartX, footerAbsentY, tallyColW * 3, rowH);
+}
+
+void drawStaffRegisterGrid() {
+  int startY = marginTop; int startX = marginX; int dateStartX = startX + nameColW + roleColW + subjColW; int rowStartY = startY + headerH;
+  int semStaffCount = 0; for(int i=0; i<totalStaff; i++) if(staffTargetSem[i] == selectedSem) semStaffCount++;
+  int visibleColCount = 0; for (int d = 0; d < days; d++) { if (daySemester[d] == selectedSem) visibleColCount++; }
+  minScrollX2 = min(0, width - (dateStartX + visibleColCount * colW + tallyColW * 2 + marginX)); minScrollY2 = min(0, height - (rowStartY + semStaffCount * rowH + rowH * 2 + marginX + 30));
+
+  fill(230); stroke(100); int trackerX = startX; rect(trackerX, startY, nameColW, headerH); rect(trackerX += nameColW, startY, roleColW, headerH); rect(trackerX += roleColW, startY, subjColW, headerH);
+  int colX = 0;
+  for (int d = 0; d < days; d++) {
+    if (daySemester[d] != selectedSem) continue; int cellRenderX = dateStartX + colX * colW;
+    if (cellRenderX + scrollX2 >= dateStartX - colW && cellRenderX + scrollX2 <= width) {
+      fill(staffDayType[d] == 'H' ? color(255, 230, 230) : (staffDayType[d] == 'F' ? color(255, 255, 204) : color(240))); rect(cellRenderX, startY, colW, headerH);
+      pushMatrix(); translate(cellRenderX + colW / 2, startY + 18); rotate(-HALF_PI); fill(0); textFont(fontBold10); text(dateLabels[d], 0, 0); popMatrix();
+      textFont(fontBold10); fill(0, 102, 204); text("P:" + dailyStaffPresent[d], cellRenderX + colW / 2, startY + headerH - 16); fill(204, 0, 0); text("A:" + dailyStaffAbsent[d], cellRenderX + colW / 2, startY + headerH - 6);
+    }
+    colX++;
+  }
+
+  int tallyStartX = dateStartX + visibleColCount * colW; fill(220); stroke(100); rect(tallyStartX, startY, tallyColW, headerH); rect(tallyStartX + tallyColW, startY, tallyColW, headerH);
+  fill(0); textFont(fontBold11); text("TOTAL P", tallyStartX + tallyColW / 2, startY + headerH / 2); text("TOTAL A", tallyStartX + tallyColW + tallyColW / 2, startY + headerH / 2);
+  trackerX = startX; text("FACULTY INSTRUCTOR", trackerX + nameColW / 2, startY + headerH / 2); text("ROLE TIER", (trackerX += nameColW) + roleColW / 2, startY + headerH / 2); text("ASSIGNED SYLLABUS COURSE", (trackerX += roleColW) + subjColW / 2, startY + headerH / 2);
+
+  int drawnRows = 0;
+  for (int i = 0; i < totalStaff; i++) {
+    if(staffTargetSem[i] != selectedSem) continue;
+    int y = rowStartY + drawnRows * rowH; trackerX = startX;
+    boolean hoverState = (mouseX - scrollX2 >= startX && mouseX - scrollX2 <= startX + nameColW + roleColW + subjColW && mouseY - scrollY2 >= y && mouseY - scrollY2 < y + rowH);
+    fill(hoverState ? color(204, 229, 255) : (drawnRows % 2 == 0 ? 255 : 248)); stroke(180); rect(trackerX, y, nameColW, rowH); rect(trackerX += nameColW, y, roleColW, rowH); rect(trackerX += roleColW, y, subjColW, rowH);
+    fill(0); textAlign(LEFT, CENTER); textFont(fontReg11); text(" " + staffNames[i], startX + 4, y + rowH / 2); textAlign(CENTER, CENTER); text(staffRoles[i], startX + nameColW + roleColW / 2, y + rowH / 2); text(staffSubjects[i], startX + nameColW + roleColW + subjColW / 2, y + rowH / 2);
+    
+    float staffPCount = 0; int innerColX = 0;
+    for (int d = 0; d < days; d++) {
+      if (daySemester[d] != selectedSem) continue;
+      int x = dateStartX + innerColX * colW; char stat = staffAttendance[i][d];
+      if (staffDayType[d] == 'H') stat = 'H';
+      if (x + scrollX2 >= dateStartX - colW && x + scrollX2 <= width) {
+        fill(staffDayType[d] == 'H' ? 245 : 255); rect(x, y, colW, rowH);
+        fill(stat == 'A' ? color(220, 0, 0) : (stat == 'M' ? color(0,153,0) : (stat == 'H' ? color(160) : color(0, 0, 180)))); textFont(fontBold12); text(stat, x + colW / 2, y + rowH / 2);
+      }
+      if (staffDayType[d] != 'H' && stat == 'P') { staffPCount += (staffDayType[d] == 'F' ? 0.5f : 1.0f); }
+      innerColX++;
+    }
+    fill(240); stroke(180); rect(tallyStartX, y, tallyColW, rowH); rect(tallyStartX + tallyColW, y, tallyColW, rowH);
+    fill(0); textFont(fontBold11);
+    text(nf(staffPCount, 1, 1), tallyStartX + tallyColW / 2, y + rowH / 2); text(nf(staffAbsences[i], 1, 1), tallyStartX + tallyColW + tallyColW / 2, y + rowH / 2);
+    drawnRows++;
+  }
+
+  int staffFooterPresentY = rowStartY + semStaffCount * rowH; int staffFooterAbsentY = staffFooterPresentY + rowH;
+  fill(220, 235, 255); stroke(100); rect(startX, staffFooterPresentY, nameColW + roleColW + subjColW, rowH); fill(255, 230, 230); rect(startX, staffFooterAbsentY, nameColW + roleColW + subjColW, rowH);
+  fill(0); textAlign(LEFT, CENTER); textFont(fontBold11); text(" STAFF TOTAL PRESENT (P)", startX + 4, staffFooterPresentY + rowH / 2); text(" STAFF TOTAL ABSENT (A)", startX + 4, staffFooterAbsentY + rowH / 2);
+
+  int staffFooterColX = 0;
+  for (int d = 0; d < days; d++) {
+    if (daySemester[d] != selectedSem) continue; int x = dateStartX + staffFooterColX * colW;
+    if (x + scrollX2 >= dateStartX - colW && x + scrollX2 <= width) {
+      fill(240, 248, 255); stroke(140); rect(x, staffFooterPresentY, colW, rowH); fill(0, 102, 204); textAlign(CENTER, CENTER); text(dailyStaffPresent[d], x + colW / 2, staffFooterPresentY + rowH / 2);
+      fill(255, 240, 240); stroke(140); rect(x, staffFooterAbsentY, colW, rowH); fill(204, 0, 0); text(dailyStaffAbsent[d], x + colW / 2, staffFooterAbsentY + rowH / 2);
+    }
+    staffFooterColX++;
+  }
+  fill(210); stroke(140); rect(tallyStartX, staffFooterPresentY, tallyColW * 2, rowH); rect(tallyStartX, staffFooterAbsentY, tallyColW * 2, rowH);
+}
+
+void drawDetailView(boolean isStudent) {
+  int startY = marginTop + 15; int activeSemIdx = selectedSem - 1;
+  fill(240); stroke(100); rect(marginX, startY, 110, 32, 4); fill(0); textFont(fontBold12); text("<- BACK GRID", marginX + 55, startY + 16);
+  fill(220); rect(marginX + 120, startY, 40, 32, 4); fill(0); text("UP", marginX + 140, startY + 16);
+  fill(220); rect(marginX + 170, startY, 50, 32, 4); fill(0); text("DOWN", marginX + 195, startY + 16);
+
+  // 5 MACRO TWEAKING PRESETS FOR ATTENDANCE INTERACTION
+  int btnW = 85; int gap = 8; int buttonStartY = marginX + 235;
+  fill(204, 0, 0); rect(buttonStartY, startY, btnW, 32, 4); fill(255); textFont(fontBold10); text("65% ATT", buttonStartY + btnW/2, startY + 16);
+  fill(204, 102, 0); rect(buttonStartY += (btnW + gap), startY, btnW, 32, 4); fill(255); text("75% ATT", buttonStartY + btnW/2, startY + 16);
+  fill(0, 102, 204); rect(buttonStartY += (btnW + gap), startY, btnW, 32, 4); fill(255); text("85% ATT", buttonStartY + btnW/2, startY + 16);
+  fill(0, 153, 76); rect(buttonStartY += (btnW + gap), startY, btnW, 32, 4); fill(255); text("95% ATT", buttonStartY + btnW/2, startY + 16);
+  fill(102, 51, 153); rect(buttonStartY += (btnW + gap), startY, btnW, 32, 4); fill(255); text("100% ATT", buttonStartY + btnW/2, startY + 16);
+  
+  fill(0); textAlign(LEFT, CENTER); textFont(fontBold14);
+  if (isStudent) text(studentNames[activeSemIdx][selectedStudent] + " (Sem " + selectedSem + ")", buttonStartY + btnW + 20, startY + 16);
+  else text(staffNames[selectedStaff] + " (Sem " + selectedSem + ")", buttonStartY + btnW + 20, startY + 16);
+
+  int gridStartX = marginX; int gridStartY = startY + 60; int viewColumns = 14; int cellWidth = (width - 2 * marginX) / viewColumns; int cellHeight = 44;
+  int visibleDCount = 0;
+  for (int d = 0; d < days; d++) {
+    if (daySemester[d] != selectedSem) continue;
+    int colIndex = visibleDCount % viewColumns; int rowIndex = visibleDCount / viewColumns;
+    int x = gridStartX + colIndex * cellWidth; int y = gridStartY + rowIndex * cellHeight;
+    char status = isStudent ? studentAttendance[activeSemIdx][selectedStudent][d] : staffAttendance[selectedStaff][d];
+    char currentDayType = isStudent ? studentDayType[d] : staffDayType[d];
+    if (currentDayType == 'H') status = 'H';
+    boolean activeCursorFocus = (d == selectedDayIndex);
+    fill(activeCursorFocus ? color(255, 255, 153) : (currentDayType == 'H' ? 245 : 255)); stroke(activeCursorFocus ? color(255, 102, 0) : color(180)); rect(x, y, cellWidth, cellHeight, 2);
+    fill(0); textFont(fontBold10); textAlign(LEFT, TOP); text(dateLabels[d], x + 2, y + 3);
+    textAlign(CENTER, CENTER); textFont(fontBold14);
+    fill(status == 'A' ? color(220, 0, 0) : (status == 'M' ? color(0,153,0) : (status == 'H' ? color(160) : color(0, 0, 180))));
+    text(status, x + cellWidth / 2, y + cellHeight / 2 + 5);
+    visibleDCount++;
+  }
+}
+
+void automateStudentTargetPercentage(int targetPercent) {
+  int activeSemIdx = selectedSem - 1;
+  for (int d = 0; d < days; d++) { if (daySemester[d] == selectedSem && studentDayType[d] != 'H') studentAttendance[activeSemIdx][selectedStudent][d] = 'P'; }
+  IntList activeDaysList = new IntList();
+  for (int d = 0; d < days; d++) { if (daySemester[d] == selectedSem && studentDayType[d] != 'H') activeDaysList.append(d); }
+  int totalActiveTermDays = activeDaysList.size(); if (totalActiveTermDays == 0) return;
+  
+  int targetAbsences = 0;
+  if (targetPercent == 65) targetAbsences = Math.round(totalActiveTermDays * 0.35f);
+  else if (targetPercent == 75) targetAbsences = Math.round(totalActiveTermDays * 0.25f);
+  else if (targetPercent == 85) targetAbsences = Math.round(totalActiveTermDays * 0.15f);
+  else if (targetPercent == 95) targetAbsences = Math.round(totalActiveTermDays * 0.05f);
+  else if (targetPercent == 100) targetAbsences = 0;
+  
+  activeDaysList.shuffle();
+  for (int i = 0; i < targetAbsences && i < totalActiveTermDays; i++) { studentAttendance[activeSemIdx][selectedStudent][activeDaysList.get(i)] = 'A'; }
+  recalculateSystemMetrics();
+}
+
+void automateStaffTargetPercentage(int targetPercent) {
+  for (int d = 0; d < days; d++) { if (daySemester[d] == selectedSem && staffDayType[d] != 'H') staffAttendance[selectedStaff][d] = 'P'; }
+  IntList activeDaysList = new IntList();
+  for (int d = 0; d < days; d++) { if (daySemester[d] == selectedSem && staffDayType[d] != 'H') activeDaysList.append(d); }
+  int totalActiveTermDays = activeDaysList.size(); if (totalActiveTermDays == 0) return;
+  
+  int targetAbsences = 0;
+  if (targetPercent == 65) targetAbsences = Math.round(totalActiveTermDays * 0.35f);
+  else if (targetPercent == 75) targetAbsences = Math.round(totalActiveTermDays * 0.25f);
+  else if (targetPercent == 85) targetAbsences = Math.round(totalActiveTermDays * 0.15f);
+  else if (targetPercent == 95) targetAbsences = Math.round(totalActiveTermDays * 0.05f);
+  else if (targetPercent == 100) targetAbsences = 0;
+  
+  activeDaysList.shuffle();
+  for (int i = 0; i < targetAbsences && i < totalActiveTermDays; i++) { staffAttendance[selectedStaff][activeDaysList.get(i)] = 'A'; }
+  recalculateSystemMetrics();
+}
+
+void drawSemesterCalendarView() {
+  int drawLeft = marginX; int drawTop = marginTop + 65; int spaceGapX = 20, spaceGapY = 20;
+  int blockW = (width - 2 * marginX - 2 * spaceGapX) / 3; int blockH = 240;
+  minScrollY3 = min(0, height - (drawTop + 2 * (blockH + spaceGapY) + marginX + 40));
+
+  int btnW = 240; int btnH = 36; int btnY = marginTop + 12;
+  fill(calendarActiveViewMode == 0 ? color(0, 102, 204) : color(240)); stroke(140); rect(drawLeft, btnY, btnW, btnH, 5);
+  fill(calendarActiveViewMode == 0 ? 255 : 0); textFont(fontBold12); text("ODD SEMESTER TRACK (JUN-OCT)", drawLeft + btnW/2, btnY + btnH/2);
+  fill(calendarActiveViewMode == 1 ? color(0, 102, 204) : color(240)); stroke(140); rect(drawLeft + btnW + 15, btnY, btnW, btnH, 5);
+  fill(calendarActiveViewMode == 1 ? 255 : 0); text("EVEN SEMESTER TRACK (DEC-APR)", drawLeft + btnW + 15 + btnW/2, btnY + btnH/2);
+
+  int targetBtnX = width - marginX - (btnW * 2) - 15;
+  fill(calendarTargetMode == 0 ? color(180, 50, 50) : color(240)); stroke(140); rect(targetBtnX, btnY, btnW, btnH, 5);
+  fill(calendarTargetMode == 0 ? 255 : 0); text("EDIT TARGET: STUDENTS CALENDAR", targetBtnX + btnW/2, btnY + btnH/2);
+  fill(calendarTargetMode == 1 ? color(180, 50, 50) : color(240)); stroke(140); rect(targetBtnX + btnW + 15, btnY, btnW, btnH, 5);
+  fill(calendarTargetMode == 1 ? 255 : 0); text("EDIT TARGET: FACULTY STAFF", targetBtnX + btnW + 15 + btnW/2, btnY + btnH/2);
+
+  int calculatedBaseYear = 2026; if(selectedSem == 3 || selectedSem == 4) calculatedBaseYear = 2027; if(selectedSem == 5 || selectedSem == 6) calculatedBaseYear = 2028;
+  int[] executionMonths = (calendarActiveViewMode == 0) ? new int[]{ 5, 6, 7, 8, 9 } : new int[]{ 11, 0, 1, 2, 3 };
+
+  for (int mIndex = 0; mIndex < executionMonths.length; mIndex++) {
+    int evaluationMonth = executionMonths[mIndex]; int yearDelta = (calendarActiveViewMode == 1 && evaluationMonth >= 0 && evaluationMonth <= 3) ? 1 : 0;
+    int col = mIndex % 3; int row = mIndex / 3; int x = drawLeft + col * (blockW + spaceGapX); int y = drawTop + row * (blockH + spaceGapY);
+    
+    fill(250); stroke(100); rect(x, y, blockW, blockH, 6);
+    fill(20, 40, 80); textAlign(LEFT, CENTER); textFont(fontBold16); text("  " + monthNames[evaluationMonth] + " " + (calculatedBaseYear + yearDelta), x + 6, y + 20);
+    
+    float cellWidth = blockW / 7.0; float cellHeight = (blockH - 50) / 6.0; float startGridY = y + 40;
+    textAlign(CENTER, CENTER); textFont(fontBold11);
+    for (int d = 0; d < 7; d++) { fill(230); stroke(160); rect(x + d * cellWidth, startGridY, cellWidth, 20); fill(0); text(weekNames[d], x + d * cellWidth + cellWidth / 2, startGridY + 10); }
+    
+    Calendar calendarInstance = new GregorianCalendar(calculatedBaseYear + yearDelta, evaluationMonth, 1);
+    int emptyCellOffset = (calendarInstance.get(Calendar.DAY_OF_WEEK) + 5) % 7; 
+    int maximumDaysInMonth = calendarInstance.getActualMaximum(Calendar.DAY_OF_MONTH);
+    Calendar structuralCalc = new GregorianCalendar(2026, 5, 10);
+    long timeDeltaMillis = calendarInstance.getTimeInMillis() - structuralCalc.getTimeInMillis();
+    int globalDayAccumulator = int(timeDeltaMillis / (1000 * 60 * 60 * 24));
+    
+    for (int day = 1; day <= maximumDaysInMonth; day++) {
+      int linearTargetDay = globalDayAccumulator + (day - 1); int gridIndex = emptyCellOffset + day - 1;
+      float cx = x + (gridIndex % 7) * cellWidth; float cy = startGridY + 20 + (gridIndex / 7) * cellHeight;
+      if (linearTargetDay >= 0 && linearTargetDay < days) {
+        char type = (calendarTargetMode == 0) ? studentDayType[linearTargetDay] : staffDayType[linearTargetDay];
+        fill(type == 'H' ? color(255, 220, 220) : (type == 'F' ? color(255, 255, 204) : color(255))); stroke(200); rect(cx, cy, cellWidth, cellHeight);
+        fill(0); textAlign(LEFT, TOP); textFont(fontBold10); text(" " + day, cx + 2, cy + 2);
+        textAlign(CENTER, CENTER); textFont(fontBold14); fill(type == 'H' ? color(204,0,0) : (type == 'F' ? color(204,102,0) : color(0, 102, 204)));
+        text(String.valueOf(type), cx + cellWidth / 2, cy + cellHeight / 2 + 4);
+      } else { fill(230); stroke(200); rect(cx, cy, cellWidth, cellHeight); }
+    }
+  }
+}
+
+// ------------------------------------------------------------
+// SCREEN 4: DME CORE TIMETABLE SUBSTATION (WITH ANIMATION ENGINE)
+// ------------------------------------------------------------
+void drawDME_TimetableScreen() {
+  int startX = marginX; int startY = marginTop + 15;
+  int tableW = width - 2 * marginX; int labelColW = 140; int scheduleColW = (tableW - labelColW) / ttDays.length;
+  int blockH = (height - startY - 40) / 8;
+
+  fill(235); stroke(100); rect(startX, startY, labelColW, blockH);
+  fill(0); textFont(fontBold12); text("PERIOD / SCHEDULE", startX + labelColW / 2, startY + blockH / 2);
+  for (int d = 0; d < ttDays.length; d++) {
+    int x = startX + labelColW + d * scheduleColW;
+    fill(235); stroke(100); rect(x, startY, scheduleColW, blockH);
+    fill(0); text(ttDays[d], x + scheduleColW / 2, startY + blockH / 2);
+  }
+
+  int activeSemIdx = selectedSem - 1; int bodyStartY = startY + blockH;
+  
+  for (int p = 0; p < 7; p++) {
+    int y = bodyStartY + p * blockH;
+    fill(245); stroke(100); rect(startX, y, labelColW, blockH); fill(0); textFont(fontBold12); text(ttPeriods[p], startX + labelColW / 2, y + blockH / 2);
+    for (int d = 0; d < ttDays.length; d++) {
+      int x = startX + labelColW + d * scheduleColW;
+      
+      boolean isAnimatingCurrentCell = false;
+      if (isAnimatingGrid && animationQueue.size() > 0) {
+        AnimStep step = animationQueue.get(0);
+        if (step.fromD == d && step.fromP == p) isAnimatingCurrentCell = true;
+      }
+      
+      fill((draggingSubject && dragSourceP == p && dragSourceD == d) || isAnimatingCurrentCell ? 240 : 255); stroke(160); rect(x, y, scheduleColW, blockH);
+      if (!(draggingSubject && dragSourceP == p && dragSourceD == d) && !isAnimatingCurrentCell) {
+        fill(0); textFont(fontBold11); text(DME_Timetable[activeSemIdx][d][p], x + scheduleColW / 2, y + blockH / 2);
+      }
+    }
+  }
+
+  if (isAnimatingGrid && animationQueue.size() > 0) {
+    AnimStep step = animationQueue.get(0);
+    float progress = (float) animFrameCount / ANIMATION_SPEED;
+    
+    float fromX, fromY;
+    if (step.fromD == -1) { 
+      fromX = startX + labelColW + step.toD * scheduleColW; fromY = -blockH; 
+    } else {
+      fromX = startX + labelColW + step.fromD * scheduleColW; fromY = bodyStartY + step.fromP * blockH;
+    }
+    
+    float toX = startX + labelColW + step.toD * scheduleColW; float toY = bodyStartY + step.toP * blockH;
+    float currX = lerp(fromX, toX, progress); float currY = lerp(fromY, toY, progress);
+    
+    fill(102, 204, 153, 230); stroke(50, 150, 100); strokeWeight(2);
+    rect(currX, currY, scheduleColW, blockH, 5);
+    fill(0); textFont(fontBold11); strokeWeight(1);
+    text(step.subjectLabel, currX + scheduleColW / 2, currY + blockH / 2);
+    
+    animFrameCount++;
+    if (animFrameCount > ANIMATION_SPEED) {
+      if (step.isDisplacement) {
+        DME_Timetable[activeSemIdx][step.toD][step.toP] = step.subjectLabel;
+        DME_Timetable[activeSemIdx][step.fromD][step.fromP] = "Free / Library";
+      } else {
+        DME_Timetable[activeSemIdx][step.toD][step.toP] = step.subjectLabel;
+      }
+      animationQueue.remove(0); animFrameCount = 0;
+      if (animationQueue.isEmpty()) { isAnimatingGrid = false; recalculateSystemMetrics(); }
+    }
+  }
+
+  if (showingTimetableStaffDetail && timetableSelectedStaff != -1 && !isAnimatingGrid) {
+    fill(0, 180); rect(0, 0, width, height); 
+    int popW = 550; int popH = 450; int cx = width/2 - popW/2; int cy = height/2 - popH/2;
+    fill(255); stroke(0); strokeWeight(2); rect(cx, cy, popW, popH, 10); strokeWeight(1);
+    
+    fill(20, 40, 80); textAlign(CENTER, TOP); textFont(fontBold20); text("FACULTY ABSENCE & WORKLOAD TRACKER", width/2, cy + 25);
+    fill(0); textFont(fontBold16); text(staffNames[timetableSelectedStaff], width/2, cy + 70);
+    textFont(fontBold12); text("Role: " + staffRoles[timetableSelectedStaff] + "  |  Course: " + staffSubjects[timetableSelectedStaff], width/2, cy + 95);
+    
+    float def = staffDeficit[timetableSelectedStaff];
+    fill(def > 0 ? color(204, 0, 0) : color(0, 153, 76)); textFont(fontBold16);
+    text("HOURS NEEDED TO TALLY BASELINE: " + nf(def, 1, 1) + " Hrs", width/2, cy + 135);
+    
+    fill(0); textFont(fontBold12); text("RECORDED ABSENCE INTERSECTIONS (SEM " + selectedSem + "):", width/2, cy + 180);
+    
+    int dx = cx + 55; int dy = cy + 215; int count = 0;
+    textFont(fontBold10);
+    for(int d=0; d<days; d++) {
+       if(daySemester[d] == selectedSem && staffTargetSem[timetableSelectedStaff] == selectedSem) {
+           if(staffAttendance[timetableSelectedStaff][d] == 'A') {
+               fill(255, 230, 230); stroke(200); rect(dx, dy, 90, 30, 4);
+               fill(204, 0, 0); textAlign(CENTER, CENTER); text(dateLabels[d], dx+45, dy+15);
+               dx += 110; count++; if(count % 4 == 0) { dx = cx + 55; dy += 45; }
+           }
+       }
+    }
+    if(count == 0) { fill(0, 153, 0); textAlign(CENTER, TOP); textFont(fontBold14); text("No Absolute Absences Logged for this Cycle.", width/2, cy + 230); }
+    
+    if (def > 0) {
+       int bW = 240; int bX = cx + popW/2 - bW/2; int bY = cy + 350;
+       boolean btnHover = mouseX >= bX && mouseX <= bX + bW && mouseY >= bY && mouseY <= bY + 40;
+       fill(btnHover ? color(0, 153, 76) : color(20, 120, 60)); stroke(0); rect(bX, bY, bW, 40, 5);
+       fill(255); textFont(fontBold12); textAlign(CENTER, CENTER); text("COMPUTE WORKLOAD ADJUSTMENT", bX + bW/2, bY + 20);
+    }
+    fill(80); textAlign(CENTER, BOTTOM); textFont(fontBold11); text("Use [UP], [DOWN] to toggle instructors  |  Click map space to exit", width/2, cy + popH - 15);
+  }
+}
+
+void triggerAutoSolveAlgorithm(int staffIdx) {
+  String targetSubj = staffSubjects[staffIdx]; int semIdx = selectedSem - 1;
+  int safetyGuard = 0; 
+  while (staffDeficit[staffIdx] > 0 && safetyGuard < 50) {
+    float[] dowYield = new float[6]; 
+    for (int dow = 0; dow < 6; dow++) {
+      for (int d = 0; d < days; d++) {
+        if (daySemester[d] - 1 == semIdx && (d + 2) % 7 == dow) {
+          if (staffDayType[d] != 'H' && staffAttendance[staffIdx][d] == 'P') { dowYield[dow] += (staffDayType[d] == 'F') ? 0.5f : 1.0f; }
+        }
+      }
+    }
+
+    int bestDow = -1; int bestPeriod = -1; float maxYield = -1;
+    for (int d = 0; d < 6; d++) {
+      int freePeriod = -1;
+      for (int p = 6; p >= 0; p--) { if (DME_Timetable[semIdx][d][p].equals("Free / Library")) { freePeriod = p; break; } }
+      if (freePeriod != -1 && dowYield[d] > maxYield) { maxYield = dowYield[d]; bestDow = d; bestPeriod = freePeriod; }
+    }
+
+    if (bestDow == -1 || maxYield <= 0) break;
+    DME_Timetable[semIdx][bestDow][bestPeriod] = targetSubj;
+    recalculateSystemMetrics(); safetyGuard++;
+  }
+  isAnimatingGrid = false; animationQueue.clear();
+}
+
+// ------------------------------------------------------------
+// SCREEN 5: REAL-TIME WORKLOAD COMPLIANCE ACCOUNTING
+// ------------------------------------------------------------
+void drawAdjustmentAccountingScreen() {
+  int startY = marginTop + 15;
+  fill(20, 40, 80); textAlign(LEFT, CENTER); textFont(fontBold16); text("FACULTY TERM WORKLOAD DISTRIBUTION AUDIT (TARGET: 560 HRS)", marginX, startY);
+
+  int tableTop = startY + 25; int idW = 50, facultyW = 200, roleW = 150, targetW = 140, realizedW = 140, adjustW = 180; int rowH3 = 34;
+  int semStaffCount = 0; for(int i=0; i<totalStaff; i++) if(staffTargetSem[i] == selectedSem) semStaffCount++;
+  minScrollY5 = min(0, height - (tableTop + rowH3 + semStaffCount * rowH3 + marginX));
+
+  fill(230); stroke(100); int currentX = marginX;
+  rect(currentX, tableTop, idW, rowH3); rect(currentX += idW, tableTop, facultyW, rowH3); rect(currentX += facultyW, tableTop, roleW, rowH3); rect(currentX += roleW, tableTop, targetW, rowH3); rect(currentX += targetW, tableTop, realizedW, rowH3); rect(currentX += realizedW, tableTop, adjustW, rowH3);
+  fill(0); currentX = marginX; textFont(fontBold11);
+  text("S.NO", currentX + idW / 2, tableTop + rowH3 / 2); text("FACULTY MEMBER", (currentX += idW) + facultyW / 2, tableTop + rowH3 / 2); text("ROLE TIER", (currentX += facultyW) + roleW / 2, tableTop + rowH3 / 2); text("DOTE REQUIREMENT", (currentX += roleW) + targetW / 2, tableTop + rowH3 / 2); text("REALIZED CONTENT", (currentX += targetW) + realizedW / 2, tableTop + rowH3 / 2); text("ADJUSTMENT FACTOR", (currentX += realizedW) + adjustW / 2, tableTop + rowH3 / 2);
+
+  int drawnRows = 0;
+  for (int i = 0; i < totalStaff; i++) {
+    if(staffTargetSem[i] != selectedSem) continue;
+    int y = tableTop + rowH3 + drawnRows * rowH3; currentX = marginX;
+    fill(drawnRows % 2 == 0 ? 255 : 248); stroke(180);
+    rect(currentX, y, idW, rowH3); rect(currentX += idW, y, facultyW, rowH3); rect(currentX += facultyW, y, roleW, rowH3); rect(currentX += roleW, y, targetW, rowH3); rect(currentX += targetW, y, realizedW, rowH3); rect(currentX += realizedW, y, adjustW, rowH3);
+    
+    fill(0); textAlign(CENTER, CENTER); textFont(fontBold11); text((drawnRows + 1), marginX + idW / 2, y + rowH3 / 2);
+    textAlign(LEFT, CENTER); text(" " + staffNames[i], marginX + idW + 4, y + rowH3 / 2);
+    textAlign(CENTER, CENTER); text(staffRoles[i], marginX + idW + facultyW + roleW / 2, y + rowH3 / 2);
+    
+    int expectedSemHours = 560; // 560 Hours baseline constraint under standard regulation splits
+    fill(0, 102, 204); textFont(fontBold12); text(expectedSemHours + " Hrs", marginX + idW + facultyW + roleW + targetW / 2, y + rowH3 / 2);
+    fill(staffActualHoursSem[i] >= expectedSemHours ? color(0, 153, 76) : color(204, 102, 0)); text(nf(staffActualHoursSem[i], 1, 1) + " Hrs", marginX + idW + facultyW + roleW + targetW + realizedW / 2, y + rowH3 / 2);
+    
+    if (staffDeficit[i] > 0) { fill(204, 0, 0); text("+" + nf(staffDeficit[i], 1, 1) + " Hrs Required", marginX + idW + facultyW + roleW + targetW + realizedW + adjustW / 2, y + rowH3 / 2); } 
+    else { fill(0, 153, 76); text("COMPLIANT", marginX + idW + facultyW + roleW + targetW + realizedW + adjustW / 2, y + rowH3 / 2); }
+    drawnRows++;
+  }
+}
+
+// ------------------------------------------------------------
+// SCREEN 6: STRICT DOTE INTERNAL MARKS AUDIT (TESTS-ONLY PATTERN)
+// ------------------------------------------------------------
+void drawInternalMarksScreen() {
+  int startY = marginTop + 15;
+  fill(20, 40, 80); textAlign(LEFT, CENTER); textFont(fontBold16); text("R2023 REFINED CONTINUOUS INTERNAL ASSESSMENT EXAM AUDIT (SEMESTER " + selectedSem + ")", marginX, startY);
+
+  int tableTop = startY + 25; 
+  int idW = 45, nameW = 210, attPctW = 120, tW = 60, avgW = 75, totW = 95; int rH = 34;
+  minScrollY6 = min(0, height - (tableTop + rH + students * rH + marginX));
+
+  fill(230); stroke(100); int cX = marginX;
+  rect(cX, tableTop, idW, rH); rect(cX += idW, tableTop, nameW, rH); rect(cX += nameW, tableTop, attPctW, rH); 
+  rect(cX += attPctW, tableTop, tW, rH); rect(cX += tW, tableTop, tW, rH); rect(cX += tW, tableTop, tW, rH); 
+  rect(cX += tW, tableTop, avgW, rH); rect(cX += avgW, tableTop, totW, rH);
+  
+  fill(0); textFont(fontBold10); cX = marginX;
+  text("S.NO", cX + idW / 2, tableTop + rH / 2); text("STUDENT IDENTIFIER", (cX += idW) + nameW / 2, tableTop + rH / 2); 
+  text("ATTENDANCE %", (cX += nameW) + attPctW / 2, tableTop + rH / 2); text("T1 (100)", (cX += attPctW) + tW / 2, tableTop + rH / 2); 
+  text("T2 (100)", (cX += tW) + tW / 2, tableTop + rH / 2); text("T3 (100)", (cX += tW) + tW / 2, tableTop + rH / 2); 
+  text("TEST AVG", (cX += tW) + avgW / 2, tableTop + rH / 2); text("INTERNAL (25)", (cX += avgW) + totW / 2, tableTop + rH / 2);
+
+  int activeSemIdx = selectedSem - 1; int startVisibleS = max(0, int((-scrollY6 - (tableTop + rH - marginTop)) / rH)); int endVisibleS = min(students, startVisibleS + (height / rH) + 2);
+
+  for (int i = startVisibleS; i < endVisibleS; i++) {
+    int y = tableTop + rH + i * rH; cX = marginX;
+    fill(i % 2 == 0 ? 255 : 248); stroke(180);
+    rect(cX, y, idW, rH); rect(cX += idW, y, nameW, rH); rect(cX += nameW, y, attPctW, rH); 
+    rect(cX += attPctW, y, tW, rH); rect(cX += tW, y, tW, rH); rect(cX += tW, y, tW, rH); 
+    rect(cX += tW, y, avgW, rH); rect(cX += avgW, y, totW, rH);
+    
+    float attendanceRatio = studentRowPresent[activeSemIdx][i] / (totalStudentWorkingDays > 0 ? totalStudentWorkingDays : 1); float attendancePct = attendanceRatio * 100.0f;
+    float medicalRatio = (studentRowPresent[activeSemIdx][i] + studentRowMedical[activeSemIdx][i]) / (totalStudentWorkingDays > 0 ? totalStudentWorkingDays : 1); float medicalPct = medicalRatio * 100.0f;
+    
+    String statusFlag = nf(attendancePct, 2, 1) + "%"; 
+    if (attendancePct < 80.0f) { if (medicalPct >= 75.0f) statusFlag += " (Cond.)"; else statusFlag += " (Detained)"; }
+    
+    float vT1 = test1Marks[activeSemIdx][i]; float vT2 = test2Marks[activeSemIdx][i]; float vT3 = test3Marks[activeSemIdx][i];
+    float avgTest = (vT1 + vT2 + vT3) / 3.0f; 
+    float scaledInternal = (avgTest / 100.0f) * 25.0f; // Pure scaling without assignment weights
+    
+    fill(0); textAlign(CENTER, CENTER); textFont(fontReg11); text((i + 1), marginX + idW / 2, y + rH / 2); textAlign(LEFT, CENTER); text(" " + studentNames[activeSemIdx][i], marginX + idW + 4, y + rH / 2);
+    textAlign(CENTER, CENTER); textFont(fontBold11);
+    
+    if(attendancePct < 75.0f) fill(204, 0, 0); else if (attendancePct < 80.0f) fill(204, 102, 0); else fill(0, 153, 0);
+    text(statusFlag, marginX + idW + nameW + attPctW / 2, y + rH / 2);
+    
+    fill(0); textFont(fontReg11);
+    text(nf(vT1, 1, 0), marginX + idW + nameW + attPctW + tW / 2, y + rH / 2); 
+    text(nf(vT2, 1, 0), marginX + idW + nameW + attPctW + tW + tW / 2, y + rH / 2); 
+    text(nf(vT3, 1, 0), marginX + idW + nameW + attPctW + tW + tW + tW / 2, y + rH / 2);
+    text(nf(avgTest, 1, 1), marginX + idW + nameW + attPctW + tW*3 + avgW / 2, y + rH / 2); 
+    
+    fill(0, 102, 204); textFont(fontBold12); 
+    text(nf(scaledInternal, 1, 1), marginX + idW + nameW + attPctW + tW*3 + avgW + totW / 2, y + rH / 2);
+  }
+}
+
+// ------------------------------------------------------------
+// INTERACTIVE CONTROL & EVENT MUTATIONS
+// ------------------------------------------------------------
+void mousePressed() {
+  if (screen == 4 && showingTimetableStaffDetail && !isAnimatingGrid) {
+    int popW = 550; int popH = 450; int cx = width/2 - popW/2; int cy = height/2 - popH/2;
+    if (staffDeficit[timetableSelectedStaff] > 0) {
+       int bW = 240; int bX = cx + popW/2 - bW/2; int bY = cy + 350;
+       if (mouseX >= bX && mouseX <= bX + bW && mouseY >= bY && mouseY <= bY + 40) {
+           showingTimetableStaffDetail = false; triggerAutoSolveAlgorithm(timetableSelectedStaff); return;
+       }
+    }
+    if(mouseX < cx || mouseX > cx + popW || mouseY < cy || mouseY > cy + popH) { showingTimetableStaffDetail = false; }
+    return;
+  }
+
+  if (isAnimatingGrid) return;
+
+  int tabW = 145; int tabH = 36; int tabY = 18;
+  for (int i = 0; i < 6; i++) {
+    int x = width - (6 - i) * (tabW + 10) - marginX;
+    if (mouseX >= x && mouseX <= x + tabW && mouseY >= tabY && mouseY <= tabY + tabH) {
+      screen = i + 1; showingStudentDetail = false; showingStaffDetail = false; showingTimetableStaffDetail = false; return;
+    }
+  }
+
+  int semBtnW = 130; int semBtnH = 32; int semBtnY = 75;
+  for (int i = 1; i <= 6; i++) {
+    int x = 260 + (i - 1) * (semBtnW + 8);
+    if (mouseX >= x && mouseX <= x + semBtnW && mouseY >= semBtnY && mouseY <= semBtnY + semBtnH) { selectedSem = i; showingTimetableStaffDetail = false; recalculateSystemMetrics(); return; }
+  }
+
+  if (screen == 3) {
+    int bW = 240; int bH = 36; int bY = marginTop + 12;
+    if (mouseX >= marginX && mouseX <= marginX + bW && mouseY >= bY && mouseY <= bY + bH) { calendarActiveViewMode = 0; return; }
+    if (mouseX >= marginX + bW + 15 && mouseX <= marginX + (bW * 2) + 15 && mouseY >= bY && mouseY <= bY + bH) { calendarActiveViewMode = 1; return; }
+    int targetBtnX = width - marginX - (bW * 2) - 15;
+    if (mouseX >= targetBtnX && mouseX <= targetBtnX + bW && mouseY >= bY && mouseY <= bY + bH) { calendarTargetMode = 0; return; }
+    if (mouseX >= targetBtnX + bW + 15 && mouseX <= targetBtnX + (bW * 2) + 15 && mouseY >= bY && mouseY <= bY + bH) { calendarTargetMode = 1; return; }
+    
+    int drawLeft = marginX; int drawTop = marginTop + 65; int spaceGapX = 20, spaceGapY = 20; int blockW = (width - 2 * marginX - 2 * spaceGapX) / 3; int blockH = 240;
+    int calculatedBaseYear = 2026; if(selectedSem == 3 || selectedSem == 4) calculatedBaseYear = 2027; if(selectedSem == 5 || selectedSem == 6) calculatedBaseYear = 2028;
+    int[] executionMonths = (calendarActiveViewMode == 0) ? new int[]{ 5, 6, 7, 8, 9 } : new int[]{ 11, 0, 1, 2, 3 };
+    
+    for (int mIndex = 0; mIndex < executionMonths.length; mIndex++) {
+      int evaluationMonth = executionMonths[mIndex]; int yearDelta = (calendarActiveViewMode == 1 && evaluationMonth >= 0 && evaluationMonth <= 3) ? 1 : 0;
+      int col = mIndex % 3; int row = mIndex / 3; int x = drawLeft + col * (blockW + spaceGapX); int y = drawTop + row * (blockH + spaceGapY);
+      if (mouseX >= x && mouseX <= x + blockW && mouseY >= y + 40 && mouseY <= y + blockH) {
+        float cellWidth = blockW / 7.0f; float cellHeight = (blockH - 50) / 6.0f; int colClick = int((mouseX - x) / cellWidth); int rowClick = int((mouseY - (y + 60)) / cellHeight);
+        Calendar calendarInstance = new GregorianCalendar(calculatedBaseYear + yearDelta, evaluationMonth, 1);
+        int emptyCellOffset = (calendarInstance.get(Calendar.DAY_OF_WEEK) + 5) % 7; int dayClick = rowClick * 7 + colClick - emptyCellOffset + 1;
+        if (dayClick >= 1 && dayClick <= calendarInstance.getActualMaximum(Calendar.DAY_OF_MONTH)) {
+          Calendar structuralCalc = new GregorianCalendar(2026, 5, 10); long timeDeltaMillis = calendarInstance.getTimeInMillis() - structuralCalc.getTimeInMillis();
+          int linearTargetDay = int(timeDeltaMillis / (1000 * 60 * 60 * 24)) + (dayClick - 1);
+          if (linearTargetDay >= 0 && linearTargetDay < days) {
+            if (calendarTargetMode == 0) { studentDayType[linearTargetDay] = (studentDayType[linearTargetDay] == 'W') ? 'H' : ((studentDayType[linearTargetDay] == 'H') ? 'F' : 'W'); } 
+            else { staffDayType[linearTargetDay] = (staffDayType[linearTargetDay] == 'W') ? 'H' : ((staffDayType[linearTargetDay] == 'H') ? 'F' : 'W'); }
+            recalculateSystemMetrics(); return;
+          }
+        }
+      }
+    }
+  }
+
+  if (screen == 1) {
+    if (showingStudentDetail) {
+      if (mouseX >= marginX && mouseX <= marginX + 110 && mouseY >= marginTop + 15 && mouseY <= marginTop + 47) { showingStudentDetail = false; return; }
+      if (mouseX >= marginX + 120 && mouseX <= marginX + 160 && mouseY >= marginTop + 15 && mouseY <= marginTop + 47) { if (selectedStudent > 0) selectedStudent--; return; }
+      if (mouseX >= marginX + 170 && mouseX <= marginX + 220 && mouseY >= marginTop + 15 && mouseY <= marginTop + 47) { if (selectedStudent < students - 1) selectedStudent++; return; }
+      
+      int bW = 85; int gp = 8; int buttonStartY = marginX + 235;
+      if (mouseY >= marginTop + 15 && mouseY <= marginTop + 47) {
+        if (mouseX >= buttonStartY && mouseX <= buttonStartY + bW) { automateStudentTargetPercentage(65); return; }
+        if (mouseX >= buttonStartY + (bW + gp) && mouseX <= buttonStartY + 2*bW + gp) { automateStudentTargetPercentage(75); return; }
+        if (mouseX >= buttonStartY + 2*(bW + gp) && mouseX <= buttonStartY + 3*bW + 2*gp) { automateStudentTargetPercentage(85); return; }
+        if (mouseX >= buttonStartY + 3*(bW + gp) && mouseX <= buttonStartY + 4*bW + 3*gp) { automateStudentTargetPercentage(95); return; }
+        if (mouseX >= buttonStartY + 4*(bW + gp) && mouseX <= buttonStartY + 5*bW + 4*gp) { automateStudentTargetPercentage(100); return; }
+      }
+      
+      int colClick = (mouseX - marginX) / ((width - 2 * marginX) / 14); int rowClick = (mouseY - (marginTop + 75)) / 44; int clickedPos = rowClick * 14 + colClick;
+      int activeScanPos = 0, targetGlobalDay = -1;
+      for(int d=0; d<days; d++) { if(daySemester[d] == selectedSem) { if(activeScanPos == clickedPos) { targetGlobalDay = d; break; } activeScanPos++; } }
+      if (colClick >= 0 && colClick < 14 && targetGlobalDay != -1) { selectedDayIndex = targetGlobalDay; executeDirectCellMutation(true, selectedSem - 1, selectedStudent, targetGlobalDay); }
+    } else {
+      float tx = mouseX - scrollX1; float ty = mouseY - scrollY1; int rowStartY = marginTop + headerH;
+      if (ty > rowStartY) {
+        if (tx >= marginX && tx <= marginX + nameColW) { int row = int((ty - rowStartY) / rowH); if (row >= 0 && row < students) { selectedStudent = row; selectedDayIndex = 0; showingStudentDetail = true; return; } }
+        int dStartX = marginX + nameColW; int targetColIdx = int((tx - dStartX) / colW);
+        int currentMatchingCol = 0, finalTargetDay = -1;
+        for (int d = 0; d < days; d++) { if (daySemester[d] == selectedSem) { if (currentMatchingCol == targetColIdx) { finalTargetDay = d; break; } currentMatchingCol++; } }
+        int sIdx = int((ty - rowStartY) / rowH);
+        if (sIdx >= 0 && sIdx < students && finalTargetDay != -1) executeDirectCellMutation(true, selectedSem - 1, sIdx, finalTargetDay);
+      }
+    }
+  } else if (screen == 2) {
+    if (showingStaffDetail) {
+      if (mouseX >= marginX && mouseX <= marginX + 110 && mouseY >= marginTop + 15 && mouseY <= marginTop + 47) { showingStaffDetail = false; return; }
+      if (mouseX >= marginX + 120 && mouseX <= marginX + 160 && mouseY >= marginTop + 15 && mouseY <= marginTop + 47) { selectedStaff--; while(selectedStaff >= 0 && staffTargetSem[selectedStaff] != selectedSem) selectedStaff--; if(selectedStaff < 0) { selectedStaff++; while(staffTargetSem[selectedStaff] != selectedSem) selectedStaff++; } return; }
+      if (mouseX >= marginX + 170 && mouseX <= marginX + 220 && mouseY >= marginTop + 15 && mouseY <= marginTop + 47) { selectedStaff++; while(selectedStaff < totalStaff && staffTargetSem[selectedStaff] != selectedSem) selectedStaff++; if(selectedStaff >= totalStaff) { selectedStaff--; while(staffTargetSem[selectedStaff] != selectedSem) selectedStaff--; } return; }
+      
+      int bW = 85; int gp = 8; int buttonStartY = marginX + 235;
+      if (mouseY >= marginTop + 15 && mouseY <= marginTop + 47) {
+        if (mouseX >= buttonStartY && mouseX <= buttonStartY + bW) { automateStaffTargetPercentage(65); return; }
+        if (mouseX >= buttonStartY + (bW + gp) && mouseX <= buttonStartY + 2*bW + gp) { automateStaffTargetPercentage(75); return; }
+        if (mouseX >= buttonStartY + 2*(bW + gp) && mouseX <= buttonStartY + 3*bW + 2*gp) { automateStaffTargetPercentage(85); return; }
+        if (mouseX >= buttonStartY + 3*(bW + gp) && mouseX <= buttonStartY + 4*bW + 3*gp) { automateStaffTargetPercentage(95); return; }
+        if (mouseX >= buttonStartY + 4*(bW + gp) && mouseX <= buttonStartY + 5*bW + 4*gp) { automateStaffTargetPercentage(100); return; }
+      }
+      
+      int colClick = (mouseX - marginX) / ((width - 2 * marginX) / 14); int rowClick = (mouseY - (marginTop + 75)) / 44; int clickedPos = rowClick * 14 + colClick;
+      int activeScanPos = 0, targetGlobalDay = -1;
+      for(int d=0; d<days; d++) { if(daySemester[d] == selectedSem) { if(activeScanPos == clickedPos) { targetGlobalDay = d; break; } activeScanPos++; } }
+      if (colClick >= 0 && colClick < 14 && targetGlobalDay != -1) { selectedDayIndex = targetGlobalDay; executeDirectCellMutation(false, 0, selectedStaff, targetGlobalDay); }
+    } else {
+      float tx = mouseX - scrollX2; float ty = mouseY - scrollY2; int rowStartY = marginTop + headerH;
+      if (ty > rowStartY) {
+        if (tx >= marginX && tx <= marginX + nameColW + roleColW + subjColW) {
+          int rowClick = int((ty - rowStartY) / rowH); int drawn = 0;
+          for(int i=0; i<totalStaff; i++) { if(staffTargetSem[i] == selectedSem) { if(drawn == rowClick) { selectedStaff = i; selectedDayIndex = 0; showingStaffDetail = true; return; } drawn++; } }
+        }
+        int dStartX = marginX + nameColW + roleColW + subjColW; int targetColIdx = int((tx - dStartX) / colW);
+        int currentMatchingCol = 0, finalTargetDay = -1;
+        for (int d = 0; d < days; d++) { if (daySemester[d] == selectedSem) { if (currentMatchingCol == targetColIdx) { finalTargetDay = d; break; } currentMatchingCol++; } }
+        int rowClick = int((ty - rowStartY) / rowH); int drawn = 0;
+        for(int i=0; i<totalStaff; i++) { if(staffTargetSem[i] == selectedSem) { if(drawn == rowClick && finalTargetDay != -1) { executeDirectCellMutation(false, 0, i, finalTargetDay); break; } drawn++; } }
+      }
+    }
+  }
+
+  if (screen == 4 && !showingTimetableStaffDetail && !isAnimatingGrid) {
+    int startX = marginX; int startY = marginTop + 15; int tableW = width - 2 * marginX; int labelColW = 140; int scheduleColW = (tableW - labelColW) / ttDays.length;
+    int blockH = (height - startY - 40) / 8; int bodyStartY = startY + blockH;
+    int c = int((mouseX - (startX + labelColW)) / scheduleColW); int r = int((mouseY - bodyStartY) / blockH);
+    if (c >= 0 && c < ttDays.length && r >= 0 && r < 7 && mouseX >= startX + labelColW && mouseY >= bodyStartY) {
+      draggingSubject = true; dragSourceP = r; dragSourceD = c; dragSubjectStr = DME_Timetable[selectedSem - 1][c][r];
+      dragMouseOffsetX = mouseX - (startX + labelColW + c * scheduleColW); dragMouseOffsetY = mouseY - (bodyStartY + r * blockH);
+    }
+  }
+}
+
+void mouseReleased() {
+  if (draggingSubject && screen == 4 && !isAnimatingGrid) {
+    int startX = marginX; int startY = marginTop + 15; int scheduleColW = ((width - 2 * marginX) - 140) / ttDays.length;
+    int blockH = (height - startY - 40) / 8; int bodyStartY = startY + blockH;
+    int c = int((mouseX - (startX + 140)) / scheduleColW); int r = int((mouseY - bodyStartY) / blockH);
+    if (c >= 0 && c < ttDays.length && r >= 0 && r < 7 && mouseX >= startX + 140 && mouseY >= bodyStartY) {
+      int activeSemIdx = selectedSem - 1;
+      if (c == dragSourceD && r == dragSourceP) {
+        String clickedSubject = DME_Timetable[activeSemIdx][c][r];
+        if (!clickedSubject.equals("Free / Library")) {
+          for(int i=0; i<totalStaff; i++){
+            if(staffTargetSem[i] == selectedSem && staffSubjects[i].equals(clickedSubject)){
+              timetableSelectedStaff = i; showingTimetableStaffDetail = true; break;
+            }
+          }
+        }
+      } else {
+        String temp = DME_Timetable[activeSemIdx][c][r];
+        DME_Timetable[activeSemIdx][c][r] = dragSubjectStr;
+        DME_Timetable[activeSemIdx][dragSourceD][dragSourceP] = temp; recalculateSystemMetrics();
+      }
+    }
+    draggingSubject = false; dragSourceP = -1; dragSourceD = -1;
+  }
+}
+
+void executeDirectCellMutation(boolean isStudent, int semIdx, int idx, int dIdx) {
+  char currentDayType = isStudent ? studentDayType[dIdx] : staffDayType[dIdx]; if (currentDayType == 'H') return;
+  char current = isStudent ? studentAttendance[semIdx][idx][dIdx] : staffAttendance[idx][dIdx];
+  char next = (current == 'P') ? 'A' : (current == 'A' ? 'M' : 'P');
+  if (isStudent) studentAttendance[semIdx][idx][dIdx] = next; else staffAttendance[idx][dIdx] = next;
+  recalculateSystemMetrics();
+}
+
+void keyPressed() {
+  if (screen == 4 && showingTimetableStaffDetail) {
+    if (keyCode == UP || uppercaseTransformer(key) == 'W') {
+      timetableSelectedStaff--; while(timetableSelectedStaff >= 0 && staffTargetSem[timetableSelectedStaff] != selectedSem) timetableSelectedStaff--;
+      if(timetableSelectedStaff < 0) { timetableSelectedStaff++; while(staffTargetSem[timetableSelectedStaff] != selectedSem) timetableSelectedStaff++; }
+    } else if (keyCode == DOWN || uppercaseTransformer(key) == 'S') {
+      timetableSelectedStaff++; while(timetableSelectedStaff < totalStaff && staffTargetSem[timetableSelectedStaff] != selectedSem) timetableSelectedStaff++;
+      if(timetableSelectedStaff >= totalStaff) { timetableSelectedStaff--; while(staffTargetSem[timetableSelectedStaff] != selectedSem) timetableSelectedStaff--; }
+    }
+    return;
+  }
+
+  if ((screen == 1 && showingStudentDetail) || (screen == 2 && showingStaffDetail)) {
+    boolean isStudent = (screen == 1);
+    if (keyCode == UP) {
+      if (isStudent && selectedStudent > 0) selectedStudent--;
+      else if (!isStudent && selectedStaff > 0) { selectedStaff--; while(selectedStaff >= 0 && staffTargetSem[selectedStaff] != selectedSem) selectedStaff--; if(selectedStaff < 0) { selectedStaff++; while(staffTargetSem[selectedStaff] != selectedSem) selectedStaff++; } }
+      recalculateSystemMetrics();
+    } else if (keyCode == DOWN) {
+      if (isStudent && selectedStudent < students - 1) selectedStudent++;
+      else if (!isStudent && selectedStaff < totalStaff - 1) { selectedStaff++; while(selectedStaff < totalStaff && staffTargetSem[selectedStaff] != selectedSem) selectedStaff++; if(selectedStaff >= totalStaff) { selectedStaff--; while(staffTargetSem[selectedStaff] != selectedSem) selectedStaff--; } }
+      recalculateSystemMetrics();
+    } else if (keyCode == LEFT) { int prevDay = selectedDayIndex - 1; while(prevDay >= 0 && daySemester[prevDay] != selectedSem) prevDay--; if(prevDay >= 0) selectedDayIndex = prevDay;
+    } else if (keyCode == RIGHT) { int nextDay = selectedDayIndex + 1; while(nextDay < days && daySemester[nextDay] != selectedSem) nextDay++; if(nextDay < days) selectedDayIndex = nextDay; }
+    
+    char k = uppercaseTransformer(key);
+    if (k == 'H') { if (isStudent) studentDayType[selectedDayIndex] = (studentDayType[selectedDayIndex] == 'H') ? 'W' : 'H'; else staffDayType[selectedDayIndex] = (staffDayType[selectedDayIndex] == 'H') ? 'W' : 'H'; recalculateSystemMetrics(); } 
+    else if (k == 'F') { if (isStudent) studentDayType[selectedDayIndex] = (studentDayType[selectedDayIndex] == 'F') ? 'W' : 'F'; else staffDayType[selectedDayIndex] = (staffDayType[selectedDayIndex] == 'F') ? 'W' : 'F'; recalculateSystemMetrics(); } 
+    else if (k == 'P' || k == 'A' || k == 'M') { char currentDayType = isStudent ? studentDayType[selectedDayIndex] : staffDayType[selectedDayIndex]; if (currentDayType != 'H') { if (isStudent) studentAttendance[selectedSem - 1][selectedStudent][selectedDayIndex] = k; else staffAttendance[selectedStaff][selectedDayIndex] = k; recalculateSystemMetrics(); } }
+  }
+}
+
+char uppercaseTransformer(char lowCaseChar) { if (lowCaseChar >= 'a' && lowCaseChar <= 'z') return char(lowCaseChar - 32); return lowCaseChar; }
+
+void mouseDragged() {
+  if (mouseY > marginTop && !draggingSubject) {
+    float deltaX = mouseX - pmouseX; float deltaY = mouseY - pmouseY;
+    if (screen == 1 && !showingStudentDetail) { scrollX1 = constrain(scrollX1 + deltaX, minScrollX1, 0); scrollY1 = constrain(scrollY1 + deltaY, minScrollY1, 0); } 
+    else if (screen == 2 && !showingStaffDetail) { scrollX2 = constrain(scrollX2 + deltaX, minScrollX2, 0); scrollY2 = constrain(scrollY2 + deltaY, minScrollY2, 0); } 
+    else if (screen == 3) { scrollY3 = constrain(scrollY3 + deltaY, minScrollY3, 0); } 
+    else if (screen == 5) { scrollX5 = constrain(scrollX5 + deltaX, minScrollX5, 0); scrollY5 = constrain(scrollY5 + deltaY, minScrollY5, 0); } 
+    else if (screen == 6) { scrollX6 = constrain(scrollX6 + deltaX, minScrollX6, 0); scrollY6 = constrain(scrollY6 + deltaY, minScrollY6, 0); }
+  }
+}
